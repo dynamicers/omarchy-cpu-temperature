@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "omarchy-cpu-temperature",
+  "name": "omarchy-cpu-temperature",
+  "version": "1.0.0",
+  "author": "Tom",
+  "description": "Highest current CPU temperature from Linux hwmon sensors",
+  "kinds": ["bar-widget"],
+  "entryPoints": { "barWidget": "CpuTemperature.qml" },
+  "barWidget": {
+    "displayName": "omarchy-cpu-temperature",
+    "category": "System",
+    "allowMultiple": false,
+    "defaultSection": "center",
+    "defaults": { "pollInterval": 3000, "warningTemperature": 85 },
+    "schema": [
+      { "key": "pollInterval", "type": "integer", "label": "Refresh interval (ms)", "min": 1000, "max": 60000, "step": 1000, "defaultValue": 3000 },
+      { "key": "warningTemperature", "type": "integer", "label": "Warning temperature (°C)", "min": 50, "max": 110, "defaultValue": 85 }
+    ]
+  }
+}
