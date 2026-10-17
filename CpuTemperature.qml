@@ -1,13 +1,18 @@
 import QtQuick
+import QtQml.Models
 import Quickshell.Io
 import qs.Ui
 import qs.Commons
+import "TemperatureUtils.js" as TemperatureUtils
 
 BarWidget {
   id: root
   moduleName: "omarchy-cpu-temperature"
 
+  property var sensorPaths: []
   property var reading: ({temperature: null, sensors: []})
+  readonly property int pollInterval: TemperatureUtils.boundedInteger(root.setting("pollInterval", 15000), 15000, 1000, 60000)
+  readonly property int warningTemperature: TemperatureUtils.boundedInteger(root.setting("warningTemperature", 85), 85, 50, 110)
   readonly property bool available: typeof reading.temperature === "number" && isFinite(reading.temperature)
   readonly property string statusTooltip: {
     if (!available) return "CPU 温度暂不可用"
@@ -18,32 +23,83 @@ BarWidget {
     return lines.join("\n")
   }
 
-  function refresh() {
-    if (!reader.running) reader.running = true
+  function updateReading() {
+    var sensors = []
+    var highest = null
+    for (var i = 0; i < readers.count; ++i) {
+      var sensor = readers.objectAt(i)
+      if (!sensor || !isFinite(sensor.temperature) || sensor.temperature < 0 || sensor.temperature > 150) continue
+      sensors.push({label: sensor.label, temperature: sensor.temperature})
+      if (highest === null || sensor.temperature > highest) highest = sensor.temperature
+    }
+    reading = {temperature: highest, sensors: sensors}
   }
 
-  Component.onCompleted: refresh()
-  implicitWidth: button.implicitWidth
-  implicitHeight: button.implicitHeight
+  function refresh() {
+    if (readers.count === 0) {
+      rediscover()
+      return
+    }
+    for (var i = 0; i < readers.count; ++i) {
+      var sensor = readers.objectAt(i)
+      if (sensor) sensor.valueFile.reload()
+    }
+  }
 
+  function rediscover() {
+    if (!discovery.running) discovery.running = true
+  }
+
+  // Normal polling spawns no processes. Retry discovery at most once per minute
+  // while unavailable, including when drivers appear late or hwmon paths change.
+  Timer {
+    interval: 60000
+    running: !root.available
+    repeat: true
+    onTriggered: root.rediscover()
+  }
   Process {
-    id: reader
-    command: ["python3", decodeURIComponent(Qt.resolvedUrl("read-temperature.py").toString().replace(/^file:\/\//, ""))]
-    onRunningChanged: {
-      if (running) watchdog.restart()
-      else watchdog.stop()
-    }
-    onExited: function(exitCode, exitStatus) {
-      if (exitCode !== 0) root.reading = {temperature: null, sensors: []}
-    }
+    id: discovery
+    running: true
+    command: ["sh", decodeURIComponent(Qt.resolvedUrl("discover-sensors.sh").toString().replace(/^file:\/\//, ""))]
     stdout: StdioCollector {
-      waitForEnd: true
       onStreamFinished: {
-        try {
-          var result = JSON.parse(text)
-          root.reading = Array.isArray(result.sensors) ? result : {temperature: null, sensors: []}
-        } catch (error) {
+        var entries = []
+        var lines = text.trim() ? text.trim().split("\n") : []
+        for (var i = 0; i < lines.length; ++i) {
+          var parts = lines[i].split("\t")
+          if (parts.length < 3) continue
+          entries.push({driver: parts[0], label: parts[1], path: parts[2]})
+        }
+        // Keep existing readers when paths are unchanged; their next poll retries
+        // failed reads without discarding successful readings unnecessarily.
+        if (JSON.stringify(entries) !== JSON.stringify(root.sensorPaths)) {
           root.reading = {temperature: null, sensors: []}
+          root.sensorPaths = entries
+        }
+      }
+    }
+  }
+
+  Instantiator {
+    id: readers
+    model: root.sensorPaths
+    delegate: QtObject {
+      id: sensor
+      required property var modelData
+      property real temperature: NaN
+      property string label: modelData.driver + ": " + modelData.label
+      property FileView valueFile: FileView {
+        path: sensor.modelData.path
+        watchChanges: false
+        printErrors: false
+        onLoaded: {
+          sensor.temperature = TemperatureUtils.parseTemperature(text())
+          Qt.callLater(root.updateReading)
+        }
+        onLoadFailed: {
+          sensor.temperature = NaN
+          Qt.callLater(root.updateReading)
         }
       }
     }
@@ -51,31 +107,31 @@ BarWidget {
 
   Timer {
     id: poll
-    interval: Math.max(1000, Number(root.setting("pollInterval", 3000)) || 3000)
+    interval: root.pollInterval
     running: true
     repeat: true
     onTriggered: root.refresh()
   }
 
-  Timer {
-    id: watchdog
-    interval: 5000
-    onTriggered: {
-      reader.running = false
-      root.reading = {temperature: null, sensors: []}
+  IpcHandler {
+    target: "cpuTemperature"
+    function status(): string {
+      return JSON.stringify({interval: poll.interval, reading: root.reading, sensors: readers.count})
     }
   }
+
+  implicitWidth: button.implicitWidth
+  implicitHeight: button.implicitHeight
 
   WidgetButton {
     id: button
     anchors.fill: parent
     bar: root.bar
-    // Stack the unit underneath on narrow vertical bars, including 100°C.
     text: root.available ? Math.round(root.reading.temperature) + (vertical ? "\n°C" : "°C") : "—"
     fontSize: Style.font.caption
     horizontalMargin: 6
     dimmed: !root.available
-    active: root.available && root.reading.temperature >= Number(root.setting("warningTemperature", 85))
+    active: root.available && root.reading.temperature >= root.warningTemperature
     tooltipText: root.statusTooltip
     onPressed: function(button) { if (button === Qt.LeftButton) root.refresh() }
   }

@@ -12,9 +12,9 @@
     "category": "System",
     "allowMultiple": false,
     "defaultSection": "center",
-    "defaults": { "pollInterval": 3000, "warningTemperature": 85 },
+    "defaults": { "pollInterval": 15000, "warningTemperature": 85 },
     "schema": [
-      { "key": "pollInterval", "type": "integer", "label": "Refresh interval (ms)", "min": 1000, "max": 60000, "step": 1000, "defaultValue": 3000 },
+      { "key": "pollInterval", "type": "integer", "label": "Refresh interval (ms)", "min": 1000, "max": 60000, "step": 1000, "defaultValue": 15000 },
       { "key": "warningTemperature", "type": "integer", "label": "Warning temperature (°C)", "min": 50, "max": 110, "defaultValue": 85 }
     ]
   }
